@@ -40,10 +40,25 @@ Built against a real container from a healthcare clinic (addiction/mental-health
 - **GTM009** — `request_appointment_all` fires on the same triggers as `request_appointment_new` and `request_appointment_existing`, double-counting every appointment conversion.
 - **GTM014** — the newsletter Element Visibility selector is a pasted class attribute with no `.` prefixes, so it matches nothing. The trigger is also orphaned (GTM001), so the bug was never noticed.
 
+## Provider layer
+
+Routes through OpenRouter (`_shared/llm.py`) so one key reaches open-weight and
+frontier models alike. Model aliases resolve against the live `/models` endpoint
+rather than being hardcoded — slugs carry date suffixes that change on release.
+
+Routing is measured, not asserted. `JUDGE_MODEL_FAST` (default `deepseek`,
+$0.14/$0.28 per M) handles naming coherence and impact ranking; `JUDGE_MODEL_DEEP`
+(default `sonnet`, $2/$10) handles custom HTML risk and PII exposure. Whether that
+split holds is an eval question, and the eval answers it with a table.
+
+Schema violations are counted per model, not silently retried away — how often a
+cheap model returns malformed structured output is the number that decides whether
+it's usable for a task.
+
 ## Status
 
 - [x] Steps 1–4: scaffold, anonymize, parse, deterministic rules
-- [ ] Step 5: LLM judgment layer (`src/judge.py`)
+- [x] Step 5: LLM judgment layer (`src/judge.py`) — written, not yet run against the API
 - [ ] Step 6: report renderer
 - [ ] Steps 7–9: eval dataset, scoring, tuning
 - [ ] Step 10: README, diagram, cost, push
