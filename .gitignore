@@ -6,3 +6,6 @@ __pycache__/
 # Real client exports and any unanonymized source data.
 # Anchored with ** so it applies inside every project folder, not just the root.
 **/data/private/
+
+# macOS Finder metadata
+.DS_Store
