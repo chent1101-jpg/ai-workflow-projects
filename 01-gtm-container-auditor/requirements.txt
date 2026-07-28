@@ -1,0 +1,4 @@
+# Parser and deterministic rules use the standard library only —
+# `python3 -m src.rules data/sample_container.json` runs with zero installs.
+anthropic==0.69.0
+python-dotenv==1.1.1
