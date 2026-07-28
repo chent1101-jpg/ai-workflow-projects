@@ -93,6 +93,7 @@ guess. Do not "fix" it by reverting the routing without measuring.
 
 - [x] Steps 1–4: scaffold, anonymize, parse, deterministic rules
 - [x] Step 5: LLM judgment layer — run, measured, two defects fixed
+- [x] Step 6: report renderer (`src/report.py`) — `reports/` holds a committed sample
 - [ ] Step 6: report renderer
 - [ ] Steps 7–9: eval dataset, scoring, tuning
 - [ ] Step 10: README, diagram, cost, push
