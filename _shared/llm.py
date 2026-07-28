@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +44,13 @@ ALIASES = {
     "sonnet": "anthropic/claude-sonnet-5",
     "opus": "anthropic/claude-opus-5",
 }
+
+
+def _progress(message: str, end: str = "\n") -> None:
+    """Per-call progress to stderr. A multi-call audit should never be a black box.
+    Silence with QUIET=1."""
+    if not os.environ.get("QUIET"):
+        print(message, end=end, file=sys.stderr, flush=True)
 
 
 class LLMError(RuntimeError):
@@ -281,10 +289,13 @@ class LLMClient:
         last_errors: list[str] = []
 
         for attempt in range(1, max_attempts + 1):
+            _progress(f"  {task} -> {self.info.slug} (attempt {attempt})... ", end="")
             raw, usage = self._post(body)
             parsed, errors = self._parse(raw, schema)
 
             if not errors:
+                _progress(f"ok  {usage[0]}+{usage[1]} tok  "
+                          f"${self.info.cost(*usage):.4f}  {time.time() - started:.1f}s")
                 self.ledger.add(Call(
                     model=self.info.slug, task=task,
                     prompt_tokens=usage[0], completion_tokens=usage[1],
@@ -296,6 +307,7 @@ class LLMClient:
 
             violations += 1
             last_errors = errors
+            _progress(f"SCHEMA VIOLATION ({len(errors)}): {errors[0]}")
             if attempt < max_attempts:
                 messages.append({"role": "assistant", "content": raw})
                 messages.append({"role": "user", "content":

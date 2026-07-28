@@ -55,10 +55,44 @@ Schema violations are counted per model, not silently retried away — how often
 cheap model returns malformed structured output is the number that decides whether
 it's usable for a task.
 
+## Measured results (2026-07-28, sample container)
+
+6 LLM findings on top of 21 deterministic ones. **Schema violation rate 0.0%** across
+both models — DeepSeek V4 Flash held the schema as reliably as Sonnet here.
+
+| | sequential | concurrent |
+|---|---|---|
+| wall clock | ~9 min | **3 min 31 s** |
+| cost | $0.136 | $0.140 |
+
+The two findings that justify the LLM layer, neither reachable by a rule:
+- **StackAdapt** — programmatic ad pixel, unconditional on All Pages, `consentStatus NOT_SET`,
+  on a healthcare site. Correctly identified as the FTC/HHS OCR enforcement pattern.
+- **Query-parameter decorator** — whitelists the HIPAA form vendor alongside two first-party
+  domains and applies identical decoration to all three, carrying `gclid` into a patient
+  intake flow. Requires knowing what `gclid` is and why that destination matters.
+
+False-positive control held: AccessiBe and the DNI config both graded `low`, with the DNI
+finding correctly noting call recording as the real risk and flagging it as not observable
+in the snippet.
+
+**Current bottleneck:** `impact_ranking` took 165.9 s of the 211 s concurrent run — 78%.
+It is sequential by necessity (needs all other findings) and DeepSeek is slow on long
+structured output. Whether a different model is better here is an eval question, not a
+guess. Do not "fix" it by reverting the routing without measuring.
+
+**Two defects found by running it, both fixed:**
+- The ranking model returned `LLM001_LLM002` — a composite rule ID it invented for two
+  findings sharing a root cause. The join was on `(rule_id, entity_name)`, so that row
+  silently matched nothing. **Never join on model-authored identifiers.** Now keyed on an
+  integer index assigned by code, with warnings for unknown ids and unranked findings.
+- The model filed AccessiBe under `regulatory_exposure` while its own consequence text
+  argued the opposite. Prompt now requires the criterion to match the argument.
+
 ## Status
 
 - [x] Steps 1–4: scaffold, anonymize, parse, deterministic rules
-- [x] Step 5: LLM judgment layer (`src/judge.py`) — written, not yet run against the API
+- [x] Step 5: LLM judgment layer — run, measured, two defects fixed
 - [ ] Step 6: report renderer
 - [ ] Steps 7–9: eval dataset, scoring, tuning
 - [ ] Step 10: README, diagram, cost, push

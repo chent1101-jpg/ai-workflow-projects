@@ -15,10 +15,12 @@ Severity was already assigned mechanically from the class of defect. That is not
 
 ## What to produce
 
-For each finding, its rank, the criterion that placed it, and one sentence naming the concrete business consequence — what breaks, who notices, what decision it distorts.
+For each finding, its `id` copied exactly from the input, its rank, the criterion that placed it, and one sentence naming the concrete business consequence — what breaks, who notices, what decision it distorts.
 
 ## Rules
 
+- Return exactly one row per input finding, reusing the input `id` verbatim. Never invent, combine, or renumber an id — if two findings share a root cause, rank them adjacently and say so in the consequence, but keep them as separate rows with their own ids.
 - Rank every finding you are given. Do not drop or merge any.
+- Assign the criterion that matches the consequence you describe. If your sentence argues a finding is low-risk, do not file it under regulatory exposure.
 - Write the consequence for the person who signs off on the fix, not for the engineer who applies it. "Every appointment conversion is counted twice, so reported cost-per-acquisition is understated by roughly half" beats "duplicate event tags."
 - Do not invent findings. Rank only what you were given.

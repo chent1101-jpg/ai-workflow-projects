@@ -19,13 +19,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from _shared.llm import LLMClient, Ledger, LLMError, load_dotenv  # noqa: E402
+from _shared.llm import LLMClient, Ledger, LLMError, _progress, load_dotenv  # noqa: E402
 
 from .parse import Container, Tag  # noqa: E402
 from .rules import Finding  # noqa: E402
@@ -119,12 +121,10 @@ RANKING_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "required": ["rule_id", "entity_name", "rank", "criterion",
-                             "business_consequence"],
+                "required": ["id", "rank", "criterion", "business_consequence"],
                 "additionalProperties": False,
                 "properties": {
-                    "rule_id": {"type": "string"},
-                    "entity_name": {"type": "string"},
+                    "id": {"type": "integer"},
                     "rank": {"type": "integer"},
                     "criterion": {"type": "string", "enum": [
                         "regulatory_exposure", "decision_corrupting_data",
@@ -277,14 +277,20 @@ class Judge:
 
     # -- 4. business impact ranking -------------------------------------------
 
-    def rank_by_impact(self, findings: list[Finding]) -> dict[tuple[str, str], dict]:
-        """Return {(rule_id, entity_name): {rank, criterion, business_consequence}}."""
+    def rank_by_impact(self, findings: list[Finding]) -> dict[int, dict]:
+        """Return {finding_index: {rank, criterion, business_consequence}}.
+
+        Keyed on an integer index we assign, not on rule_id — the model will
+        happily invent a composite id like "LLM001_LLM002" when it decides two
+        findings share a root cause, and any join on model-authored identifiers
+        silently drops those rows.
+        """
         if not findings:
             return {}
         payload = [
-            {"rule_id": f.rule_id, "entity_name": f.entity_name,
+            {"id": i, "rule_id": f.rule_id, "entity_name": f.entity_name,
              "severity": f.severity, "message": f.message}
-            for f in findings
+            for i, f in enumerate(findings)
         ]
         result = self.fast.complete_json(
             system=SYSTEM,
@@ -294,31 +300,56 @@ class Judge:
             task="impact_ranking",
             schema_name="impact_ranking",
         )
-        return {
-            (r["rule_id"], r["entity_name"]): {
+
+        valid = range(len(findings))
+        ranked = {
+            r["id"]: {
                 "rank": r["rank"],
                 "criterion": r["criterion"],
                 "business_consequence": r["business_consequence"],
             }
-            for r in result["ranked"]
+            for r in result["ranked"] if r["id"] in valid
         }
+        if dropped := len(result["ranked"]) - len(ranked):
+            _progress(f"  WARNING: ranking returned {dropped} row(s) with unknown ids")
+        if missing := set(valid) - set(ranked):
+            _progress(f"  WARNING: {len(missing)} finding(s) were not ranked")
+        return ranked
 
 
 def run(container: Container, deterministic: list[Finding], vertical: str,
-        ledger: Ledger | None = None) -> tuple[list[Finding], dict, Ledger]:
-    """Run the judgment layer. Returns (llm_findings, impact_map, ledger)."""
+        ledger: Ledger | None = None, max_workers: int = 6
+        ) -> tuple[list[Finding], dict, Ledger]:
+    """Run the judgment layer. Returns (llm_findings, impact_map, ledger).
+
+    The per-tag risk calls, the PII pass, and the naming pass are independent, so
+    they run concurrently. Only the impact ranking is sequential — it needs every
+    other finding as input. Sequentially this took ~9 minutes on a 19-tag
+    container, which is too slow for a per-client tool.
+    """
     judge = Judge(vertical, ledger)
+
+    jobs: list[tuple[str, Any]] = [
+        (f"html_risk:{tag.name}", lambda t=tag: judge.html_risk(container, t))
+        for tag in container.tags if tag.type == "html" and tag.html
+    ]
+    jobs.append(("pii_exposure", lambda: judge.pii_exposure(container)))
+    jobs.append(("naming_coherence", lambda: judge.naming_coherence(container)))
+
     findings: list[Finding] = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(fn): label for label, fn in jobs}
+        for future in as_completed(futures):
+            label = futures[future]
+            try:
+                if finding := future.result():
+                    findings.append(finding)
+            except LLMError as exc:
+                # One failed judgment must not lose the other five.
+                _progress(f"  FAILED {label}: {exc}")
 
-    for tag in container.tags:
-        if tag.type == "html" and tag.html:
-            if finding := judge.html_risk(container, tag):
-                findings.append(finding)
-
-    if finding := judge.pii_exposure(container):
-        findings.append(finding)
-    if finding := judge.naming_coherence(container):
-        findings.append(finding)
+    # Deterministic order regardless of completion order, so runs are comparable.
+    findings.sort(key=lambda f: (f.rule_id, f.entity_name))
 
     impact = judge.rank_by_impact(deterministic + findings)
     return findings, impact, judge.ledger
@@ -350,8 +381,13 @@ if __name__ == "__main__":
         print(f"[{f.severity.upper():8}] {f.rule_id} {f.entity_name}")
         print(f"           {f.message}\n")
 
+    # impact is keyed by index into this combined list — same order run() ranked.
+    all_findings = deterministic + llm_findings
+
     print("Impact ranking (top 5):")
-    for key, meta in sorted(impact.items(), key=lambda kv: kv[1]["rank"])[:5]:
-        print(f"  {meta['rank']}. [{meta['criterion']}] {key[0]} — {meta['business_consequence']}")
+    for idx, meta in sorted(impact.items(), key=lambda kv: kv[1]["rank"])[:5]:
+        f = all_findings[idx]
+        print(f"  {meta['rank']}. [{meta['criterion']}] {f.rule_id} {f.entity_name}")
+        print(f"     {meta['business_consequence']}")
 
     print("\nCost:", json.dumps(ledger.summary(), indent=2))
